@@ -1,0 +1,300 @@
+﻿<!DOCTYPE html>
+<html ng-app="social">
+<head>
+    <title></title>
+    <meta name="viewport" content="width=device-width,initial-scale=1.0,minimum-scale=1.0,maximum-scale=1.0" />
+    <link rel="stylesheet" href="bootstrap.css" />
+    <link rel="stylesheet" href="bootstrap-responsive.css" />
+    <style>
+        @media (min-width: 980px) {
+            body {
+                padding-top: 45px;
+            }
+        }
+    </style>
+    <script src="angular.js"></script>
+    <script src="http://code.jquery.com/jquery-1.9.0.min.js"></script>
+    <script src="bootstrap.js"></script>
+    <script src="angular.js"></script>
+    <script src="/socket.io/socket.io.js"></script>
+    <script>
+        Number.prototype.toDate = function () { return new Date(this); };
+        Date.prototype.format = function () {
+            var output = '';
+            output += ' Year : ' + this.getFullYear();
+            output += ' Month : ' + (this.getMonth() + 1);
+            output += ' Day : ' + this.getDate();
+            output += ' Hour : ' + this.getHours();
+            output += ' Min : ' + this.getMinutes();
+            return output;
+        }
+    </script>
+    <script>
+        // creating module.
+        var social = angular.module('social', [], function ($routeProvider) {
+            // Route - Feeds
+            $routeProvider.when('/', {
+                templateUrl: 'feeds.html',
+                controller: FeedsController
+            });
+
+            // Route - Friends
+            $routeProvider.when('/friends', {
+                templateUrl: 'friends.html',
+                controller: FriendsController
+            });
+
+            // Route - Friends Detail :id
+            $routeProvider.when('/friends/:id', {
+                templateUrl: 'detail.html',
+                controller: FriendsDetailController
+            });
+
+            // Route - Other
+            $routeProvider.otherwise({
+                redirectTo: '/'
+            });
+        });
+    </script>
+    <!-- socket Factory -->
+    <script>
+        // declaring variable
+        var socketCallback = function () { };
+
+        // connecting to socekt.
+        var socket = io.connect();
+        socket.on('message', function (data) {
+            socketCallback(data);
+        });
+
+        //creating $socket factory
+        social.factory('$socket', function ($rootScope) {
+            return {
+                onPush: function (callback) {
+                    socketCallback = function (receive) {
+                        callback(receive);
+                        $rootScope.$apply();
+                    };
+                }
+            }
+        });
+    </script>
+    <!-- infinite Scroll Factory -->
+    <script>
+        // declaring variable
+        var scrollCallback = function () { };
+        var scroll = function () {
+            var scrollHeight = $(window).scrollTop() + $(window).height();
+            var documentHeight = $(document).height();
+
+            if (scrollHeight > documentHeight - 200) {
+                //console.log('');
+                scrollCallback();
+                $(window).off('scroll', scroll);
+            }
+        };
+
+        // connecting scroll event
+        $(window).on('scroll', scroll);
+
+        // creating $scroll factory.
+        social.factory('$scroll', function ($rootScope) {
+            return {
+                infinity: function (callback) {
+                    scrollCallback = function () {
+                        callback();
+                        $rootScope.$apply();
+                    };
+                },
+                restart: function (callback) {
+                    console.log('restart')
+                    $(window).on('scroll', scroll);
+                }
+            }
+        });
+    </script>
+    <!-- Feeds Controller -->
+    <script>
+        function FeedsController($scope, $timeout, $http, $socket, $scroll) {
+            // assigning variable.
+            var time = new Date().getTime();
+            
+            // assigning Angular.js variable.
+            $scope.status = '';
+
+            // event
+            $scope.onStatusSubmit = function () {
+                // perform web request.
+                $http.post('/posts', {
+                    status: $scope.status
+                }).success(function (data, status) {
+                    $scope.status = '';
+                });
+                $timeout(function () {
+                    // display loading message.
+                    $scope.status = 'transfering data to server.';
+                });
+            }
+
+            $scope.onReply = function (post) {
+                $http.post('/replies/' + post._id, {
+                    status: post.content
+                }).success(function (data, status) {
+                    post.content = '';
+                });
+            };
+
+            // perform web request
+            $http.get('/posts?dummy=' + Date.now()).success(function (data, staus) {
+                // add data.
+                $scope.posts = data;
+
+                // insert last data time
+                if (data.length != 0) {
+                    time = data[data.length - 1].regdate;
+                }
+            })
+
+            // connect socket event
+            $socket.onPush(function (data) {
+                if (data.code == 3) {
+                    // creating new post
+                    $scope.posts.unshift(data.data);
+                    $scope.status = ''
+                } else if (data.code == 4) {
+                    // creating new reply
+                    $.each($scope.posts, function (index, item) {
+                        if (item._id == data.target) {
+                            item.replies.push(data.data);
+                        }
+                    });
+                }
+            });
+
+            // connect socket event
+            $scroll.infinity(function () {
+                $http.get('/posts?time=' + time + '&dummy=' + Date.now()).success(function (data, staus) {
+                    if (data.length != 0) {
+                        $.each(data, function (index, item) {
+                            $scope.posts.push(item);
+                        });
+                        $scroll.restart();
+
+                        // saving last data time
+                        time = data[data.length - 1].regdate;
+                    }
+                })
+            });
+        }
+    </script>
+    <!-- Friends Detail Controller -->
+    <script>
+        function FriendsDetailController($scope, $routeParams, $http, $scroll) {
+            // decalring variable.
+            var id = $routeParams.id;
+
+            // perform web request
+            $http.get('/postsOf/' + id + '?dummy=' + Date.now()).success(function (data, staus) {
+                // adding data
+                $scope.posts = data;
+
+                // saving last data time.
+                if (data.length != 0) {
+                    time = data[data.length - 1].regdate;
+                }
+            });
+
+            // connect socket event.
+            $scroll.infinity(function () {
+                $http.get('/postsOf/' + id + '?time=' + time + '&dummy=' + Date.now()).success(function (data, staus) {
+                    if (data.length != 0) {
+                        $.each(data, function (index, item) {
+                            $scope.posts.push(item);
+                        });
+                        $scroll.restart();
+
+                        // save last data time
+                        time = data[data.length - 1].regdate;
+                    }
+                })
+            });
+        }
+    </script>
+    <!-- Friends Controller-->
+    <script>
+        function FriendsController($scope, $http) {
+            $scope.onSearch = function () {
+                var target = $scope.query;
+                $http.get('/search/' + target).success(function (data, status) {
+                    $scope.acceptFriends = data.acceptFriends;
+                    $scope.requestFriends = data.requestFriends;
+                    $scope.pendingFriends = data.pendingFriends;
+                    $scope.other = data.other;
+                });
+            };
+
+            $scope.onRequestFriend = function (user) {
+                $http.get('/friends/request/' + user._id).success(function (data, status) {
+                    alert('Sent friend request.');
+                    location.hash = '#/';
+                });
+            };
+
+            $scope.onAcceptFriend = function (user) {
+                $http.get('/friends/request/' + user._id).success(function (data, status) {
+                    alert('Became friend.');
+                    location.hash = '#/';
+                });
+            };
+        }
+    </script>
+</head>
+<body>
+    <header>
+        <div class="navbar navbar-fixed-top navbar-inverse">
+            <div class="navbar-inner">
+                <div class="container">
+                    <a class="btn btn-navbar" data-toggle="collapse" data-target=".nav-collapse">
+                        <span class="icon-bar"></span>
+                        <span class="icon-bar"></span>
+                        <span class="icon-bar"></span>
+                    </a>
+                    <a class="brand" href="#/">Social Node</a>
+                    <div class="nav-collapse collapse">
+                        <ul class="nav">
+                            <li class="active">
+                                <a href="#/feeds">
+                                    <i class="icon-home icon-white"></i>
+                                    <span>Home</span>
+                                </a>
+                            </li>
+                            <li>
+                                <a href="#/friends" role="button" data-toggle="modal">
+                                    <i class="icon-pencil icon-white"></i>
+                                    <span>Friends</span>
+                                </a>
+                            </li>
+                        </ul>
+                        <ul class="nav pull-right">
+                            <li>
+                                <a href="/logout">
+                                    <span>Logout</span>
+                                </a>
+                            </li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </header>
+    <div class="container">
+        <div class="row">
+            <div class="span3 hidden-phone">
+
+            </div>
+            <div class="span9">
+                <div ng-view></div>
+            </div>
+        </div>
+</body>
+</html>
